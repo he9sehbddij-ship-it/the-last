@@ -1,0 +1,6 @@
+python-telegram-bot
+PyMuPDF
+img2pdf
+Pillow
+opencv-python-headless
+numpy
