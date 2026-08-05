@@ -15,12 +15,12 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8889805404:AAHNTvZ0i5xq0fYd2UqFRhFY6yTKZIILe_Q")
 
-# مخزن ذاكرة الصور والملفات لكل مستخدم
+# مخزن البيانات المؤقت
 user_photos_store = {}
 user_pdf_store = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚡ أرسل الصور لتحويلها إلى PDF، أو أرسل ملفات PDF متعددة لاستخراج الصور منها بضغطة زر واحدة!")
+    await update.message.reply_text("⚡ أرسل الصور للتحويل الفوري إلى PDF، أو أرسل ملفات PDF لاستخراج الصور منها.")
 
 # ----------------- معالجة الصور -----------------
 async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
@@ -80,7 +80,7 @@ async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data["timer_task"] = asyncio.create_task(update_photo_ui(user_id, context))
 
-# ----------------- معالجة ملفات الـ PDF المتعددة -----------------
+# ----------------- معالجة ملفات الـ PDF -----------------
 async def update_pdf_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.sleep(0.4)
     if user_id not in user_pdf_store:
@@ -151,7 +151,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # تحويل الصور إلى PDF
     if query.data == "convert_to_pdf":
         if user_id not in user_photos_store or not user_photos_store[user_id]["photos"]:
-            await query.edit_message_text("❌ لا توجد صور في القائمة.")
+            try:
+                await query.delete_message()
+            except Exception:
+                pass
             return
 
         data = user_photos_store[user_id]
@@ -183,10 +186,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_photos_store.pop(user_id, None)
             await context.bot.send_message(chat_id=query.message.chat_id, text=f"❌ خطأ: {str(e)}")
 
-    # استخراج الصور من ملفات الـ PDF المتعددة
+    # استخراج الصور من PDF
     elif query.data == "extract_all_pdfs":
         if user_id not in user_pdf_store or not user_pdf_store[user_id]["files"]:
-            await query.edit_message_text("❌ لا توجد ملفات PDF.")
+            try:
+                await query.delete_message()
+            except Exception:
+                pass
             return
 
         data = user_pdf_store[user_id]
@@ -204,7 +210,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pix = page.get_pixmap(dpi=90)
                     all_extracted_images.append(pix.tobytes("jpg"))
 
-            # إرسال جميع الصور في ألبومات من 10 صور
             for i in range(0, len(all_extracted_images), 10):
                 chunk = all_extracted_images[i:i + 10]
                 media_group = [InputMediaPhoto(media=io.BytesIO(img)) for img in chunk]
@@ -220,7 +225,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "cancel_action":
         user_photos_store.pop(user_id, None)
         user_pdf_store.pop(user_id, None)
-        await query.edit_message_text("❌ تم الإلغاء وتفريغ الذاكرة.")
+        try:
+            await query.delete_message()
+        except Exception:
+            pass
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
