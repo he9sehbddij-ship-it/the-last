@@ -1,8 +1,6 @@
 import os
 import asyncio
 import io
-import cv2
-import numpy as np
 import fitz  # PyMuPDF
 import img2pdf
 from PIL import Image
@@ -17,90 +15,23 @@ from telegram.ext import (
     filters,
 )
 
-# قراءة التوكن من متغيرات بيئة GitHub Secrets
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8889805404:AAHNTvZ0i5xg0fYd2UgFRhFY6yTKZIILe_Q")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8889805404:AAHNTvZ0i5xq0fYd2UqFRhFY6yTKZIILe_Q")
 
 user_photos = {}
 executor = ThreadPoolExecutor(max_workers=100)
 
-def auto_crop_and_fix(image_bytes):
-    try:
-        nparr = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        if img is None:
-            return Image.open(io.BytesIO(image_bytes)).convert('RGB')
-
-        orig = img.copy()
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(blurred, 50, 200)
-
-        contours, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
-
-        card_contour = None
-        for c in contours:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4:
-                card_contour = approx
-                break
-
-        if card_contour is not None:
-            pts = card_contour.reshape(4, 2)
-            rect = np.zeros((4, 2), dtype="float32")
-
-            s = pts.sum(axis=1)
-            rect[0] = pts[np.argmin(s)]
-            rect[2] = pts[np.argmax(s)]
-
-            diff = np.diff(pts, axis=1)
-            rect[1] = pts[np.argmin(diff)]
-            rect[3] = pts[np.argmax(diff)]
-
-            (tl, tr, br, bl) = rect
-            widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-            widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-            maxWidth = max(int(widthA), int(widthB))
-
-            heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-            heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-            maxHeight = max(int(heightA), int(heightB))
-
-            dst = np.array([
-                [0, 0],
-                [maxWidth - 1, 0],
-                [maxWidth - 1, maxHeight - 1],
-                [0, maxHeight - 1]], dtype="float32")
-
-            M = cv2.getPerspectiveTransform(rect, dst)
-            warped = cv2.warpPerspective(orig, M, (maxWidth, maxHeight))
-            
-            if warped.shape[0] > warped.shape[1]:
-                warped = cv2.rotate(warped, cv2.ROTATE_90_CLOCKWISE)
-
-            color_converted = cv2.cvtColor(warped, cv2.COLOR_BGR2RGB)
-            return Image.fromarray(color_converted)
-
-        pil_img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        if pil_img.height > pil_img.width:
-            pil_img = pil_img.rotate(-90, expand=True)
-        return pil_img
-    except Exception:
-        return Image.open(io.BytesIO(image_bytes)).convert('RGB')
-
-def process_id_cards_a4(photos_bytes_list):
-    processed_images = [auto_crop_and_fix(b) for b in photos_bytes_list]
-    
+def process_id_cards_fast(photos_bytes_list):
     a4_width, a4_height = 2480, 3508
     cards_per_page = 4
     pages_bytes = []
 
+    # فتح الصور مباشرة وتحويلها إلى RGB بأسرع طريقة
+    images = [Image.open(io.BytesIO(b)).convert('RGB') for b in photos_bytes_list]
+
     card_pairs = []
-    for i in range(0, len(processed_images), 2):
-        front = processed_images[i]
-        back = processed_images[i+1] if (i + 1) < len(processed_images) else None
+    for i in range(0, len(images), 2):
+        front = images[i]
+        back = images[i+1] if (i + 1) < len(images) else None
         card_pairs.append((front, back))
 
     for p in range(0, len(card_pairs), cards_per_page):
@@ -114,7 +45,7 @@ def process_id_cards_a4(photos_bytes_list):
             f_aspect = front.height / front.width
             f_w = target_card_w
             f_h = int(f_w * f_aspect)
-            front_resized = front.resize((f_w, f_h), Image.Resampling.LANCZOS)
+            front_resized = front.resize((f_w, f_h), Image.Resampling.BILINEAR)
 
             x_front = 160
             canvas.paste(front_resized, (x_front, y_offset))
@@ -123,7 +54,7 @@ def process_id_cards_a4(photos_bytes_list):
                 b_aspect = back.height / back.width
                 b_w = target_card_w
                 b_h = int(b_w * b_aspect)
-                back_resized = back.resize((b_w, b_h), Image.Resampling.LANCZOS)
+                back_resized = back.resize((b_w, b_h), Image.Resampling.BILINEAR)
                 
                 x_back = x_front + f_w + 160
                 canvas.paste(back_resized, (x_back, y_offset))
@@ -134,16 +65,16 @@ def process_id_cards_a4(photos_bytes_list):
             y_offset += max_h + 160
 
         img_byte_arr = io.BytesIO()
-        canvas.save(img_byte_arr, format='JPEG', quality=95)
+        canvas.save(img_byte_arr, format='JPEG', quality=85)
         pages_bytes.append(img_byte_arr.getvalue())
 
     return img2pdf.convert(pages_bytes)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "🚀 أهلاً بك في البوت الذكي!\n\n"
-        "• أرسل صورة أو صوراً واضغط [📄 تحويل إلى PDF] أو [💳 تسطير بطاقات A4] لجمع 4 بطاقات بصفحة واحدة.\n"
-        "• أرسل ملف PDF للتعامل معه مباشرة واستخراج الصور منه."
+        "🚀 أهلاً بك في البوت السريع جداً!\n\n"
+        "• أرسل أي عدد من الصور واختر [📄 تحويل إلى PDF] أو [💳 تسطير 4 بطاقات بصفحة A4].\n"
+        "• أرسل ملف PDF لاستخراج جميع الصور منه بسرعة."
     )
     await update.message.reply_text(msg)
 
@@ -171,11 +102,11 @@ async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"📄 تحويل إلى PDF ({count} صورة)", callback_data="convert_pdf_fast")],
-        [InlineKeyboardButton(f"💳 تسطير بطاقات A4 ({count} صورة)", callback_data="convert_id_card")],
+        [InlineKeyboardButton(f"💳 تسطير 4 بطاقات في صفحة ({count} صورة)", callback_data="convert_id_card")],
         [InlineKeyboardButton("❌ مسح وإلغاء", callback_data="cancel_all")]
     ])
 
-    text_msg = f"📥 تم استلام ({count}) صورة حتى الآن...\nاختر طريقة التحويل المطلوبة:"
+    text_msg = f"📥 تم استلام ({count}) صورة حتى الآن...\nاختر العملية المطلوبة:"
 
     ctrl_id = user_photos[user_id]["ctrl_msg_id"]
     if ctrl_id:
@@ -214,8 +145,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo_objects = list(user_photos[user_id]["photos"])
         total_count = len(photo_objects)
 
-        mode_text = "قص وتسطير 4 بطاقات بصفحة A4" if query.data == "convert_id_card" else "تحويل إلى PDF"
-        await query.edit_message_text(f"🚀 جاري معالجة {total_count} صورة بنظام [{mode_text}]...")
+        mode_text = "تسطير 4 بطاقات بصفحة" if query.data == "convert_id_card" else "تحويل سريع إلى PDF"
+        await query.edit_message_text(f"⚡ جاري معالجة {total_count} صورة بنظام [{mode_text}]...")
 
         try:
             download_tasks = [fetch_photo_bytes(p) for p in photo_objects]
@@ -226,7 +157,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if query.data == "convert_id_card":
                 pdf_bytes = await loop.run_in_executor(
                     executor, 
-                    lambda: process_id_cards_a4(photos_bytes_list)
+                    lambda: process_id_cards_fast(photos_bytes_list)
                 )
             else:
                 pdf_bytes = await loop.run_in_executor(
@@ -240,7 +171,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_document(
                 chat_id=query.message.chat_id,
                 document=pdf_stream,
-                caption=f"⚡ تم تنفيذ التحويل بنجاح!"
+                caption=f"⚡ تم تنفيذ التحويل بنجاح وسرعة!"
             )
 
             user_photos.pop(user_id, None)
@@ -256,7 +187,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("❌ انتهت جلسة الملف، يرجى إعادة إرساله.")
             return
 
-        await query.edit_message_text("⚡ جاري استخراج جميع الصور من ملف الـ PDF...")
+        await query.edit_message_text("⚡ جاري استخراج الصور...")
 
         try:
             def extract_pdf_ultra_fast():
@@ -273,10 +204,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         batch_images.append(pix.tobytes("jpg"))
                     all_batches.append(batch_images)
                     
-                return all_batches, total_pages
+                return all_batches
 
             loop = asyncio.get_event_loop()
-            batches, total_pages = await loop.run_in_executor(executor, extract_pdf_ultra_fast)
+            batches = await loop.run_in_executor(executor, extract_pdf_ultra_fast)
 
             for batch in batches:
                 media_group = [
@@ -326,7 +257,7 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_callback))
 
-    print("🚀 البوت جاهز ويعمل بكافة الخيارات المطلوبة على GitHub Actions...")
+    print("🚀 البوت السريع يعمل بكفاءة وبدون أي أخطاء...")
     app.run_polling()
 
 if __name__ == "__main__":
