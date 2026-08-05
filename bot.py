@@ -15,14 +15,13 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8889805404:AAHNTvZ0i5xq0fYd2UqFRhFY6yTKZIILe_Q")
 
-# مخزن البيانات المؤقت لسرعة الفائقة
 user_photos_store = {}
 user_pdf_store = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚡ أرسل الصور للتحويل المباشر إلى PDF، أو أرسل ملفات PDF لاستخراج كافة الصور منها فوراً.")
+    await update.message.reply_text("⚡ أرسل الصور للتحويل المباشر إلى PDF، أو أرسل ملف PDF لاستخراج كافة الصور منه.")
 
-# ----------------- 1. معالجة وتجميع الصور -----------------
+# ----------------- تجميع الصور والتحويل السريع -----------------
 async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     await asyncio.sleep(0.3)
     if user_id not in user_photos_store:
@@ -34,7 +33,7 @@ async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"⚡ تحويل ({count}) صورة إلى PDF فوراً", callback_data="convert_to_pdf")],
+        [InlineKeyboardButton(f"⚡ تحويل ({count}) صورة إلى PDF", callback_data="convert_to_pdf")],
         [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
     ])
 
@@ -49,7 +48,7 @@ async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     try:
         msg = await context.bot.send_message(
             chat_id=chat_id,
-            text=f"📥 تم استلام ({count}) صورة.",
+            text=f"📥 تم استلام ({count}) صورة...",
             reply_markup=keyboard
         )
         data["ctrl_msg_id"] = msg.message_id
@@ -84,9 +83,9 @@ async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data["timer_task"] = asyncio.create_task(update_photo_ui(user_id, context))
 
-# ----------------- 2. معالجة واستخراج الـ PDF -----------------
+# ----------------- استخراج الـ PDF -----------------
 async def update_pdf_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(0.3)
     if user_id not in user_pdf_store:
         return
 
@@ -111,7 +110,7 @@ async def update_pdf_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     try:
         msg = await context.bot.send_message(
             chat_id=chat_id,
-            text=f"📄 تم استلام ({count}) ملف PDF.",
+            text=f"📄 تم استلام ({count}) ملف PDF...",
             reply_markup=keyboard
         )
         data["ctrl_msg_id"] = msg.message_id
@@ -146,13 +145,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data["timer_task"] = asyncio.create_task(update_pdf_ui(user_id, context))
 
-# ----------------- 3. تنفيذ العمليات بأقصى سرعة -----------------
+# ----------------- تنفيذ الأوامر بأسرع وقت -----------------
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
 
-    # تحويل الصور إلى PDF
     if query.data == "convert_to_pdf":
         if user_id not in user_photos_store or not user_photos_store[user_id]["bytes_list"]:
             try:
@@ -173,7 +171,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             pdf_bytes = img2pdf.convert(photos_bytes)
-            
             pdf_stream = io.BytesIO(pdf_bytes)
             pdf_stream.name = f"Document_{total}.pdf"
 
@@ -187,7 +184,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             user_photos_store.pop(user_id, None)
 
-    # استخراج كافة الصور من الـ PDF دون نقص
     elif query.data == "extract_all_pdfs":
         if user_id not in user_pdf_store or not user_pdf_store[user_id]["files"]:
             try:
@@ -213,7 +209,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pix = page.get_pixmap(dpi=100)
                     all_extracted_images.append(pix.tobytes("jpg"))
 
-            # إرسال كافة الصور كألبومات مرتبة فوراً
             for i in range(0, len(all_extracted_images), 10):
                 chunk = all_extracted_images[i:i + 10]
                 media_group = [InputMediaPhoto(media=io.BytesIO(img)) for img in chunk]
