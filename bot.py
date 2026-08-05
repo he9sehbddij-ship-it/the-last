@@ -3,7 +3,6 @@ import asyncio
 import io
 import fitz  # PyMuPDF
 import img2pdf
-from concurrent.futures import ThreadPoolExecutor
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     ApplicationBuilder,
@@ -16,20 +15,15 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8889805404:AAHNTvZ0i5xq0fYd2UqFRhFY6yTKZIILe_Q")
 
-# القاموس لحفظ بيانات الصور لكل مستخدم
+# ذاكرة مؤقتة فائقة السرعة
 user_data_store = {}
-executor = ThreadPoolExecutor(max_workers=50)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "⚡ أهلاً بك!\n\n"
-        "• أرسل الصور دفعة واحدة وسيظهر لك زر التحويل فوراً.\n"
-        "• أرسل ملف PDF لاستخراج جميع الصور منه بضغطة زر."
-    )
+    await update.message.reply_text("⚡ أرسل الصور للتحويل إلى PDF، أو أرسل ملف PDF لاستخراج الصور فوراً.")
 
 async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """وظيفة لتحديث الزر بذكاء بعد اكتمال وصول مجموعة الصور لعدم التعليق"""
-    await asyncio.sleep(0.6)  # انتظار بسيط لضمان وصول جميع الصور المرسلة دفعة واحدة
+    # انتظار قصير جداً (0.3 ثانية) لجمع الصور المرفوعة دفعة واحدة
+    await asyncio.sleep(0.3)
     
     if user_id not in user_data_store:
         return
@@ -41,11 +35,11 @@ async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"📄 تحويل ({photos_count}) صورة إلى PDF", callback_data="convert_to_pdf")],
-        [InlineKeyboardButton("❌ مسح وإلغاء", callback_data="cancel_action")]
+        [InlineKeyboardButton(f"⚡ تحويل ({photos_count}) صورة إلى PDF فوراً", callback_data="convert_to_pdf")],
+        [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
     ])
 
-    text_msg = f"📥 تم استلام ({photos_count}) صورة.\nاضغط للتحويل الفوري:"
+    text_msg = f"📥 تم استلام ({photos_count}) صورة."
 
     try:
         if data.get("ctrl_msg_id"):
@@ -63,7 +57,7 @@ async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
             )
             data["ctrl_msg_id"] = msg.message_id
     except Exception:
-        pass  # تجنب أخطاء التليجرام عند التحديث السريع
+        pass
 
 async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -79,15 +73,12 @@ async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
     data = user_data_store[user_id]
-    
     if data["is_processing"]:
         return
 
-    # أخذ أعلى دقة للصورة المرسلة
-    photo = update.message.photo[-1]
-    data["photos"].append(photo)
+    # حفظ أعلى دقة مباشرة
+    data["photos"].append(update.message.photo[-1])
 
-    # إلغاء المؤقت القديم وإنشاء مؤقت جديد لإعطاء مهلة لتجميع كافة الصور
     if data.get("timer_task"):
         data["timer_task"].cancel()
 
@@ -100,72 +91,54 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "convert_to_pdf":
         if user_id not in user_data_store or not user_data_store[user_id]["photos"]:
-            await query.edit_message_text("❌ حدث تنشيط للذاكرة، يرجى إرسال الصور من جديد.")
+            await query.edit_message_text("❌ حدث خطأ، أرسل الصور مجدداً.")
             return
 
         data = user_data_store[user_id]
-        if data.get("is_processing"):
-            return
-
         data["is_processing"] = True
         photos_list = list(data["photos"])
         total = len(photos_list)
 
-        await query.edit_message_text(f"⚡ جاري تحويل {total} صورة إلى PDF بأقصى سرعة...")
+        await query.edit_message_text(f"⚡ جاري التحويل الفوري لـ {total} صورة...")
 
         try:
-            # تنزيل جميع الصور بالتوازي لسرعة فائقة
+            # تنزيل الصور بالتوازي بأسرع سرعة
             async def download_bytes(p):
                 f = await p.get_file()
                 return bytes(await f.download_as_bytearray())
 
-            download_tasks = [download_bytes(p) for p in photos_list]
-            photos_bytes = await asyncio.gather(*download_tasks)
+            photos_bytes = await asyncio.gather(*[download_bytes(p) for p in photos_list])
 
-            # التحويل إلى PDF بدون استهلاك معالج السيرفر
-            loop = asyncio.get_event_loop()
-            pdf_bytes = await loop.run_in_executor(
-                executor, lambda: img2pdf.convert(photos_bytes)
-            )
-
+            # تحويل في الذاكرة بلمح البصر
+            pdf_bytes = img2pdf.convert(photos_bytes)
             pdf_stream = io.BytesIO(pdf_bytes)
-            pdf_stream.name = f"Photos_{total}.pdf"
+            pdf_stream.name = f"Images_{total}.pdf"
 
             await context.bot.send_document(
                 chat_id=query.message.chat_id,
                 document=pdf_stream,
-                caption=f"⚡ تم تحويل {total} صورة بنجاح!"
+                caption=f"✅ تم تحويل {total} صورة بنجاح!"
             )
 
-            # تفريغ الذاكرة تماماً بعد النجاح
             user_data_store.pop(user_id, None)
 
         except Exception as e:
-            if user_id in user_data_store:
-                user_data_store[user_id]["is_processing"] = False
-            await context.bot.send_message(chat_id=query.message.chat_id, text=f"❌ حدث خطأ: {str(e)}")
+            user_data_store.pop(user_id, None)
+            await context.bot.send_message(chat_id=query.message.chat_id, text=f"❌ خطأ: {str(e)}")
 
     elif query.data == "extract_pdf_photos":
-        pdf_data = context.user_data.get("pdf_bytes")
-        if not pdf_data:
-            await query.edit_message_text("❌ انتهت الجلسة، أرسل ملف الـ PDF مرة أخرى.")
+        pdf_bytes = context.user_data.get("pdf_bytes")
+        if not pdf_bytes:
+            await query.edit_message_text("❌ انتهت الجلسة، أرسل الـ PDF مجدداً.")
             return
 
-        await query.edit_message_text("⚡ جاري استخراج الصور وإرسالها فوراً...")
+        await query.edit_message_text("⚡ جاري استخراج الصور...")
 
         try:
-            def extract_all():
-                doc = fitz.open(stream=pdf_data, filetype="pdf")
-                images = []
-                for page in doc:
-                    pix = page.get_pixmap(dpi=100)
-                    images.append(pix.tobytes("jpg"))
-                return images
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            all_images = [page.get_pixmap(dpi=90).tobytes("jpg") for page in doc]
 
-            loop = asyncio.get_event_loop()
-            all_images = await loop.run_in_executor(executor, extract_all)
-
-            # تقسيم الصور لمجموعات (كل ألبوم 10 صور) لسرعة الإرسال
+            # إرسال ألبومات سريعة (10 صور بكل ألبوم)
             for i in range(0, len(all_images), 10):
                 chunk = all_images[i:i + 10]
                 media_group = [InputMediaPhoto(media=io.BytesIO(img)) for img in chunk]
@@ -180,16 +153,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "cancel_action":
         user_data_store.pop(user_id, None)
         context.user_data.pop("pdf_bytes", None)
-        await query.edit_message_text("❌ تم الإلغاء وتفريغ الذاكرة.")
+        await query.edit_message_text("❌ تم الإلغاء.")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
-    
     if doc.mime_type == 'application/pdf' or doc.file_name.lower().endswith('.pdf'):
         file = await context.bot.get_file(doc.file_id)
-        pdf_bytes = await file.download_as_bytearray()
-        
-        context.user_data["pdf_bytes"] = bytes(pdf_bytes)
+        context.user_data["pdf_bytes"] = bytes(await file.download_as_bytearray())
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("🖼️ استخراج كافة الصور من الـ PDF", callback_data="extract_pdf_photos")],
@@ -197,19 +167,16 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
 
         await update.message.reply_text(
-            f"📄 تم استلام ملف الـ PDF ({doc.file_name})\nاضغط أدناه لاستخراج الصور فوراً:",
+            f"📄 تم استلام ملف ({doc.file_name}):",
             reply_markup=keyboard
         )
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photos))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_callback))
-
-    print("🚀 البوت السريع والمستقر يعمل بدون تعليق...")
     app.run_polling()
 
 if __name__ == "__main__":
