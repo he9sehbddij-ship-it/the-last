@@ -15,16 +15,15 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8889805404:AAHNTvZ0i5xq0fYd2UqFRhFY6yTKZIILe_Q")
 
-# مخزن البيانات المؤقت
 user_photos_store = {}
 user_pdf_store = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚡ أرسل الصور للتحويل الفوري إلى PDF، أو أرسل ملفات PDF لاستخراج الصور منها.")
+    await update.message.reply_text("⚡ أرسل الصور للتحويل الفوري، أو ملفات PDF للاستخراج.")
 
-# ----------------- معالجة الصور -----------------
+# ----------------- معالجة الصور وإظهار الرسالة أسفل المحادثة دائماً -----------------
 async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.1)
     if user_id not in user_photos_store:
         return
 
@@ -38,21 +37,22 @@ async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
     ])
 
+    chat_id = data["chat_id"]
+
+    # حذف الرسالة القديمة إن وجدت حتى تظهر الرسالة الجديدة في الأسفل تماماً
+    if data.get("ctrl_msg_id"):
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=data["ctrl_msg_id"])
+        except Exception:
+            pass
+
     try:
-        if data.get("ctrl_msg_id"):
-            await context.bot.edit_message_text(
-                chat_id=data["chat_id"],
-                message_id=data["ctrl_msg_id"],
-                text=f"📥 تم استلام ({count}) صورة.",
-                reply_markup=keyboard
-            )
-        else:
-            msg = await context.bot.send_message(
-                chat_id=data["chat_id"],
-                text=f"📥 تم استلام ({count}) صورة.",
-                reply_markup=keyboard
-            )
-            data["ctrl_msg_id"] = msg.message_id
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"📥 تم استلام ({count}) صورة...",
+            reply_markup=keyboard
+        )
+        data["ctrl_msg_id"] = msg.message_id
     except Exception:
         pass
 
@@ -80,9 +80,9 @@ async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data["timer_task"] = asyncio.create_task(update_photo_ui(user_id, context))
 
-# ----------------- معالجة ملفات الـ PDF -----------------
+# ----------------- معالجة الـ PDF بنفس الطريقة (في الأسفل دائماً) -----------------
 async def update_pdf_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(0.1)
     if user_id not in user_pdf_store:
         return
 
@@ -92,25 +92,25 @@ async def update_pdf_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"🖼️ استخراج الصور من ({count}) ملفات PDF", callback_data="extract_all_pdfs")],
+        [InlineKeyboardButton(f"🖼️ استخراج الصور من ({count}) ملف PDF", callback_data="extract_all_pdfs")],
         [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
     ])
 
+    chat_id = data["chat_id"]
+
+    if data.get("ctrl_msg_id"):
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=data["ctrl_msg_id"])
+        except Exception:
+            pass
+
     try:
-        if data.get("ctrl_msg_id"):
-            await context.bot.edit_message_text(
-                chat_id=data["chat_id"],
-                message_id=data["ctrl_msg_id"],
-                text=f"📄 تم استلام ({count}) ملف PDF.",
-                reply_markup=keyboard
-            )
-        else:
-            msg = await context.bot.send_message(
-                chat_id=data["chat_id"],
-                text=f"📄 تم استلام ({count}) ملف PDF.",
-                reply_markup=keyboard
-            )
-            data["ctrl_msg_id"] = msg.message_id
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"📄 تم استلام ({count}) ملف PDF...",
+            reply_markup=keyboard
+        )
+        data["ctrl_msg_id"] = msg.message_id
     except Exception:
         pass
 
@@ -142,13 +142,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data["timer_task"] = asyncio.create_task(update_pdf_ui(user_id, context))
 
-# ----------------- الأزرار والتحويل -----------------
+# ----------------- التنفيذ الصاروخي والمباشر -----------------
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
 
-    # تحويل الصور إلى PDF
     if query.data == "convert_to_pdf":
         if user_id not in user_photos_store or not user_photos_store[user_id]["photos"]:
             try:
@@ -162,7 +161,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photos_list = list(data["photos"])
         total = len(photos_list)
 
-        await query.edit_message_text(f"⚡ جاري تحويل {total} صورة إلى PDF...")
+        try:
+            await query.delete_message()
+        except Exception:
+            pass
 
         try:
             async def download_bytes(p):
@@ -173,20 +175,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pdf_bytes = img2pdf.convert(photos_bytes)
             
             pdf_stream = io.BytesIO(pdf_bytes)
-            pdf_stream.name = f"Images_{total}.pdf"
+            pdf_stream.name = f"Document_{total}.pdf"
 
             await context.bot.send_document(
                 chat_id=query.message.chat_id,
-                document=pdf_stream,
-                caption=f"✅ تم تحويل {total} صورة بنجاح!"
+                document=pdf_stream
             )
 
             user_photos_store.pop(user_id, None)
         except Exception as e:
             user_photos_store.pop(user_id, None)
-            await context.bot.send_message(chat_id=query.message.chat_id, text=f"❌ خطأ: {str(e)}")
 
-    # استخراج الصور من PDF
     elif query.data == "extract_all_pdfs":
         if user_id not in user_pdf_store or not user_pdf_store[user_id]["files"]:
             try:
@@ -198,9 +197,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = user_pdf_store[user_id]
         data["is_processing"] = True
         files_list = list(data["files"])
-        total_files = len(files_list)
 
-        await query.edit_message_text(f"⚡ جاري استخراج جميع الصور من {total_files} ملف PDF...")
+        try:
+            await query.delete_message()
+        except Exception:
+            pass
 
         try:
             all_extracted_images = []
@@ -215,12 +216,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 media_group = [InputMediaPhoto(media=io.BytesIO(img)) for img in chunk]
                 await context.bot.send_media_group(chat_id=query.message.chat_id, media=media_group)
 
-            await query.delete_message()
             user_pdf_store.pop(user_id, None)
 
         except Exception as e:
             user_pdf_store.pop(user_id, None)
-            await context.bot.send_message(chat_id=query.message.chat_id, text=f"❌ خطأ أثناء الاستخراج: {str(e)}")
 
     elif query.data == "cancel_action":
         user_photos_store.pop(user_id, None)
