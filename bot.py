@@ -15,46 +15,47 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8889805404:AAHNTvZ0i5xq0fYd2UqFRhFY6yTKZIILe_Q")
 
+# مخزن البيانات السريع في الذاكرة
 user_photos_store = {}
 user_pdf_store = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚡ أرسل الصور للتحويل الفوري، أو ملفات PDF للاستخراج.")
+    await update.message.reply_text("⚡ أرسل الصور للتحويل الفوري إلى PDF، أو ملفات PDF للاستخراج.")
 
-# ----------------- معالجة وتجميع جميع ألبومات الصور -----------------
+# ----------------- معالجة الصور والتنزيل الفوري -----------------
 async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    # انتظار ثانيتين لجمع كافة الألبومات المرسلة (حتى لو كانت 100+ صورة)
-    await asyncio.sleep(2.0)
-    
+    await asyncio.sleep(0.4)
     if user_id not in user_photos_store:
         return
 
     data = user_photos_store[user_id]
-    count = len(data["photos"])
+    count = len(data["bytes_list"])
     if count == 0 or data.get("is_processing"):
         return
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"⚡ تحويل الملف الكامل ({count}) صورة إلى PDF", callback_data="convert_to_pdf")],
+        [InlineKeyboardButton(f"⚡ تحويل ({count}) صورة إلى PDF فوراً", callback_data="convert_to_pdf")],
         [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
     ])
 
     chat_id = data["chat_id"]
 
-    # حذف الرسالة السابقة إن وجدت لإبقاء زر واحد فقط في الأسفل
-    if data.get("ctrl_msg_id"):
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=data["ctrl_msg_id"])
-        except Exception:
-            pass
-
+    # التحديث أو إرسال الرسالة في الأسفل
     try:
-        msg = await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"📥 تم اكتمال تجميع ({count}) صورة.\nاضغط أدناه للتحويل إلى PDF واحد:",
-            reply_markup=keyboard
-        )
-        data["ctrl_msg_id"] = msg.message_id
+        if data.get("ctrl_msg_id"):
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=data["ctrl_msg_id"],
+                text=f"📥 تم جاهزية ({count}) صورة للتحويل...",
+                reply_markup=keyboard
+            )
+        else:
+            msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"📥 تم جاهزية ({count}) صورة للتحويل...",
+                reply_markup=keyboard
+            )
+            data["ctrl_msg_id"] = msg.message_id
     except Exception:
         pass
 
@@ -64,7 +65,7 @@ async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id not in user_photos_store:
         user_photos_store[user_id] = {
-            "photos": [],
+            "bytes_list": [],
             "ctrl_msg_id": None,
             "chat_id": chat_id,
             "is_processing": False,
@@ -75,18 +76,22 @@ async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data["is_processing"]:
         return
 
-    # إضافة الصورة للقائمة
-    data["photos"].append(update.message.photo[-1])
+    # تنزيل الصورة فوراً لحظة وصولها إلى الذاكرة لتفادي أي تأخير عند الضغط على الزر
+    photo = update.message.photo[-1]
+    file_obj = await photo.get_file()
+    photo_bytes = await file_obj.download_as_bytearray()
+    
+    data["bytes_list"].append(bytes(photo_bytes))
 
-    # إعادة ضبط عداد الانتظار مع كل صورة قادمة لتجميعها كلها بنفس المجموعة
+    # إعادة جدولة التحديث
     if data.get("timer_task"):
         data["timer_task"].cancel()
 
     data["timer_task"] = asyncio.create_task(update_photo_ui(user_id, context))
 
-# ----------------- معالجة الـ PDF -----------------
+# ----------------- معالجة ملفات الـ PDF -----------------
 async def update_pdf_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(1.5)
+    await asyncio.sleep(0.4)
     if user_id not in user_pdf_store:
         return
 
@@ -102,19 +107,21 @@ async def update_pdf_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = data["chat_id"]
 
-    if data.get("ctrl_msg_id"):
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=data["ctrl_msg_id"])
-        except Exception:
-            pass
-
     try:
-        msg = await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"📄 تم تجميع ({count}) ملف PDF...",
-            reply_markup=keyboard
-        )
-        data["ctrl_msg_id"] = msg.message_id
+        if data.get("ctrl_msg_id"):
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=data["ctrl_msg_id"],
+                text=f"📄 تم استلام ({count}) ملف PDF...",
+                reply_markup=keyboard
+            )
+        else:
+            msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"📄 تم استلام ({count}) ملف PDF...",
+                reply_markup=keyboard
+            )
+            data["ctrl_msg_id"] = msg.message_id
     except Exception:
         pass
 
@@ -146,14 +153,15 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data["timer_task"] = asyncio.create_task(update_pdf_ui(user_id, context))
 
-# ----------------- زر التحويل الفوري -----------------
+# ----------------- أزرار التحويل الصاروخية -----------------
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    # الإجابة الفورية لمنع تعليق الزر في تليجرام
     await query.answer()
     user_id = query.from_user.id
 
     if query.data == "convert_to_pdf":
-        if user_id not in user_photos_store or not user_photos_store[user_id]["photos"]:
+        if user_id not in user_photos_store or not user_photos_store[user_id]["bytes_list"]:
             try:
                 await query.delete_message()
             except Exception:
@@ -162,8 +170,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data = user_photos_store[user_id]
         data["is_processing"] = True
-        photos_list = list(data["photos"])
-        total = len(photos_list)
+        photos_bytes = list(data["bytes_list"])
+        total = len(photos_bytes)
 
         try:
             await query.delete_message()
@@ -171,28 +179,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
         try:
-            # تنزيل جميع الصور بالتوازي
-            async def download_bytes(p):
-                f = await p.get_file()
-                return bytes(await f.download_as_bytearray())
-
-            photos_bytes = await asyncio.gather(*[download_bytes(p) for p in photos_list])
-            
-            # تحويل المئة صورة إلى ملف واحد فورا
+            # التحويل فوري لأن الصور منزلّة ومجهزة بالكامل في RAM
             pdf_bytes = img2pdf.convert(photos_bytes)
             
             pdf_stream = io.BytesIO(pdf_bytes)
-            pdf_stream.name = f"Images_{total}.pdf"
+            pdf_stream.name = f"Document_{total}.pdf"
 
             await context.bot.send_document(
                 chat_id=query.message.chat_id,
                 document=pdf_stream,
-                caption=f"✅ تم تحويل {total} صورة في ملف واحد بنجاح!"
+                caption=f"✅ تم التحويل الفوري لـ {total} صورة!"
             )
 
             user_photos_store.pop(user_id, None)
         except Exception as e:
             user_photos_store.pop(user_id, None)
+            await context.bot.send_message(chat_id=query.message.chat_id, text=f"❌ حدث خطأ: {str(e)}")
 
     elif query.data == "extract_all_pdfs":
         if user_id not in user_pdf_store or not user_pdf_store[user_id]["files"]:
