@@ -21,9 +21,11 @@ user_pdf_store = {}
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⚡ أرسل الصور للتحويل الفوري، أو ملفات PDF للاستخراج.")
 
-# ----------------- معالجة الصور وإظهار الرسالة أسفل المحادثة دائماً -----------------
+# ----------------- معالجة وتجميع جميع ألبومات الصور -----------------
 async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(0.1)
+    # انتظار ثانيتين لجمع كافة الألبومات المرسلة (حتى لو كانت 100+ صورة)
+    await asyncio.sleep(2.0)
+    
     if user_id not in user_photos_store:
         return
 
@@ -33,13 +35,13 @@ async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"⚡ تحويل ({count}) صورة إلى PDF", callback_data="convert_to_pdf")],
+        [InlineKeyboardButton(f"⚡ تحويل الملف الكامل ({count}) صورة إلى PDF", callback_data="convert_to_pdf")],
         [InlineKeyboardButton("❌ إلغاء", callback_data="cancel_action")]
     ])
 
     chat_id = data["chat_id"]
 
-    # حذف الرسالة القديمة إن وجدت حتى تظهر الرسالة الجديدة في الأسفل تماماً
+    # حذف الرسالة السابقة إن وجدت لإبقاء زر واحد فقط في الأسفل
     if data.get("ctrl_msg_id"):
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=data["ctrl_msg_id"])
@@ -49,7 +51,7 @@ async def update_photo_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     try:
         msg = await context.bot.send_message(
             chat_id=chat_id,
-            text=f"📥 تم استلام ({count}) صورة...",
+            text=f"📥 تم اكتمال تجميع ({count}) صورة.\nاضغط أدناه للتحويل إلى PDF واحد:",
             reply_markup=keyboard
         )
         data["ctrl_msg_id"] = msg.message_id
@@ -73,16 +75,18 @@ async def handle_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data["is_processing"]:
         return
 
+    # إضافة الصورة للقائمة
     data["photos"].append(update.message.photo[-1])
 
+    # إعادة ضبط عداد الانتظار مع كل صورة قادمة لتجميعها كلها بنفس المجموعة
     if data.get("timer_task"):
         data["timer_task"].cancel()
 
     data["timer_task"] = asyncio.create_task(update_photo_ui(user_id, context))
 
-# ----------------- معالجة الـ PDF بنفس الطريقة (في الأسفل دائماً) -----------------
+# ----------------- معالجة الـ PDF -----------------
 async def update_pdf_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(1.5)
     if user_id not in user_pdf_store:
         return
 
@@ -107,7 +111,7 @@ async def update_pdf_ui(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     try:
         msg = await context.bot.send_message(
             chat_id=chat_id,
-            text=f"📄 تم استلام ({count}) ملف PDF...",
+            text=f"📄 تم تجميع ({count}) ملف PDF...",
             reply_markup=keyboard
         )
         data["ctrl_msg_id"] = msg.message_id
@@ -142,7 +146,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         data["timer_task"] = asyncio.create_task(update_pdf_ui(user_id, context))
 
-# ----------------- التنفيذ الصاروخي والمباشر -----------------
+# ----------------- زر التحويل الفوري -----------------
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -167,19 +171,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
         try:
+            # تنزيل جميع الصور بالتوازي
             async def download_bytes(p):
                 f = await p.get_file()
                 return bytes(await f.download_as_bytearray())
 
             photos_bytes = await asyncio.gather(*[download_bytes(p) for p in photos_list])
+            
+            # تحويل المئة صورة إلى ملف واحد فورا
             pdf_bytes = img2pdf.convert(photos_bytes)
             
             pdf_stream = io.BytesIO(pdf_bytes)
-            pdf_stream.name = f"Document_{total}.pdf"
+            pdf_stream.name = f"Images_{total}.pdf"
 
             await context.bot.send_document(
                 chat_id=query.message.chat_id,
-                document=pdf_stream
+                document=pdf_stream,
+                caption=f"✅ تم تحويل {total} صورة في ملف واحد بنجاح!"
             )
 
             user_photos_store.pop(user_id, None)
