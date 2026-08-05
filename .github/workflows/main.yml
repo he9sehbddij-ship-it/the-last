@@ -3,6 +3,9 @@ name: Telegram Bot Runner
 on:
   push:
     branches: [ main, master ]
+  schedule:
+    # إعادة تشغيل آلي كل 5 ساعات لضمان عدم توقف البوت أبداً
+    - cron: '0 */5 * * *'
   workflow_dispatch:
 
 jobs:
